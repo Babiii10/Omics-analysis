@@ -1553,13 +1553,18 @@ apply_threshold <- function(model_result, new_threshold, groups = NULL) {
   scorelearning <- model_result$datalearningmodel$reslearningmodel$scorelearning
   classlearning <- model_result$datalearningmodel$reslearningmodel$classlearning
 
+  # Convert scorelearning to vector if it's a data.frame
+  if(is.data.frame(scorelearning)) {
+    scorelearning <- scorelearning[,1]
+  }
+
   predictclasslearning <- factor(levels = lev)
   predictclasslearning[which(scorelearning >= new_threshold)] <- lev["positif"]
   predictclasslearning[which(scorelearning < new_threshold)] <- lev["negatif"]
   predictclasslearning <- as.factor(predictclasslearning)
 
   # Update reslearningmodel with new predictions
-  # Create data.frame exactly as in original modelfunction (line 2385-2387)
+  # Create data.frame exactly as in original modelfunction (line 2450-2451)
   reslearningmodel <- data.frame(classlearning, scorelearning, predictclasslearning)
   colnames(reslearningmodel) <- c("classlearning", "scorelearning", "predictclasslearning")
 
@@ -1574,12 +1579,17 @@ apply_threshold <- function(model_result, new_threshold, groups = NULL) {
     scoreval <- model_result$datavalidationmodel$resvalidationmodel$scoreval
     classval <- model_result$datavalidationmodel$resvalidationmodel$classval
 
+    # Convert scoreval to vector if it's a data.frame
+    if(is.data.frame(scoreval)) {
+      scoreval <- scoreval[,1]
+    }
+
     predictclassval <- vector(length = length(scoreval))
     predictclassval[which(scoreval >= new_threshold)] <- lev["positif"]
     predictclassval[which(scoreval < new_threshold)] <- lev["negatif"]
     predictclassval <- as.factor(predictclassval)
 
-    # Create data.frame exactly as in original modelfunction (line 2542-2544)
+    # Create data.frame exactly as in original modelfunction
     resvalidationmodel <- data.frame(classval, scoreval, predictclassval)
     colnames(resvalidationmodel) <- c("classval", "scoreval", "predictclassval")
 
