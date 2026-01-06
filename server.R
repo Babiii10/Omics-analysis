@@ -994,6 +994,7 @@ BASE_MODEL<-reactive({
 # MODEL_WITH_THRESHOLD: Applique le seuil aux scores (RAPIDE)
 # ============================================================
 MODEL_WITH_THRESHOLD <- reactive({
+  req(BASE_MODEL())
   cat("=== APPLYING THRESHOLD (fast operation) ===\n")
 
   # Obtenir le modèle de base (avec scores)
@@ -1975,3 +1976,4 @@ output$downloadplottestparametersboth = downloadHandler(
 }) 
 
 # 
+
