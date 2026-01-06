@@ -845,50 +845,55 @@ output$donwloadPCAPlot =  downloadHandler(
 
 
 ######
-MODEL<-reactive({
-  if(input$test=="notest"){learningmodel<<-TRANSFORMDATA()$LEARNINGTRANSFORM}
-  else{learningmodel<<-TEST()$LEARNINGDIFF}
-  validation<<-DATA()$VALIDATION
-  datastructuresfeatures<<-SELECTDATA()$DATASTRUCTUREDFEATURES
-  transformdataparameters<<-TRANSFORMDATA()$transformdataparameters
-  learningselect<-SELECTDATA()$LEARNINGSELECT
-  # Get hyperparameters for all models
+BASE_MODEL <- reactive({
+  # Validation des inputs
+  validate(need(input$confirmdatabutton!=0, "Confirm data"))
+  
+  # Obtenir les données transformées
+  learningmodel <- TRANSFORMDATA()$LEARNINGTRANSFORM
+  learningselect <- SELECTDATA()$LEARNINGSELECT
+  transformdataparameters <- TRANSFORMDATA()$transformdataparameters
+  datastructuresfeatures <- SELECTDATA()$DATASTRUCTUREDFEATURES
+  
+  # Si feature selection est activée, utiliser les données différentielles
+  if(input$fs) {
+    validate(need(!is.null(TEST()), "Run test first"))
+    learningmodel <- TEST()$LEARNINGDIFF
+  }
+  
+  # Obtenir les données de validation
+  validation <- DATA()$VALIDATION
+  
+  # Collecte des hyperparamètres (SANS thresholdmodel)
+  # ElasticNet parameters
   alpha_model <- NULL
   lambda_model <- NULL
-  ntree_model <- 1000
-  autotunerf_param <- TRUE
-  mtry_model <- NULL
-  autotunesvm_param <- TRUE
-  cost_model <- NULL
-  gamma_model <- NULL
-  kernel_model <- NULL
-  autotunexgb_param <- TRUE
-  nrounds_model <- NULL
-  maxdepth_model <- NULL
-  eta_model <- NULL
-
-  # ElasticNet parameters - based on tuning method
   if(input$model == "elasticnet"){
     tuning_method_en <- if(!is.null(input$tuning_method_en)) input$tuning_method_en else "traditional"
-    if(tuning_method_en == "manual" || tuning_method_en == "traditional"){
-      alpha_model <- input$alphamodel
-    }
     if(tuning_method_en == "manual"){
-      lambda_model <- input$lambdamodel
+      alpha_model <- input$alphaen
+      lambda_model <- input$lambdaen
     }
   }
-
-  # Random Forest parameters - based on tuning method
+  
+  # RandomForest parameters
+  ntree_model <- NULL
+  autotunerf_param <- TRUE
+  mtry_model <- NULL
   if(input$model == "randomforest"){
     tuning_method_rf <- if(!is.null(input$tuning_method_rf)) input$tuning_method_rf else "traditional"
-    ntree_model <- input$ntreerf
     autotunerf_param <- (tuning_method_rf != "manual")
-    if(tuning_method_rf == "manual"){
+    if(!autotunerf_param){
+      ntree_model <- input$ntreerf
       mtry_model <- input$mtryrf
     }
   }
-
-  # SVM parameters - no change, still using checkbox
+  
+  # SVM parameters
+  cost_model <- NULL
+  gamma_model <- NULL
+  kernel_model <- NULL
+  autotunesvm_param <- TRUE
   if(input$model == "svm"){
     autotunesvm_param <- input$autotunesvm
     if(!input$autotunesvm){
@@ -897,8 +902,12 @@ MODEL<-reactive({
       kernel_model <- input$kernelsvm
     }
   }
-
-  # XGBoost parameters - based on tuning method
+  
+  # XGBoost parameters
+  autotunexgb_param <- TRUE
+  nrounds_model <- NULL
+  maxdepth_model <- NULL
+  eta_model <- NULL
   if(input$model == "xgboost"){
     tuning_method_xgb <- if(!is.null(input$tuning_method_xgb)) input$tuning_method_xgb else "traditional"
     autotunexgb_param <- (tuning_method_xgb != "manual")
@@ -908,13 +917,12 @@ MODEL<-reactive({
       eta_model <- input$etaxgb
     }
   }
-
-  # LightGBM parameters - no change
+  
+  # LightGBM parameters
   autotunelgb_param <- TRUE
   nrounds_lgb_model <- NULL
   num_leaves_model <- NULL
   learning_rate_lgb_model <- NULL
-
   if(input$model == "lightgbm"){
     autotunelgb_param <- input$autotunelgb
     if(!input$autotunelgb){
@@ -923,11 +931,10 @@ MODEL<-reactive({
       learning_rate_lgb_model <- input$learningratelgb
     }
   }
-
-  # KNN parameters - based on tuning method
+  
+  # KNN parameters
   autotuneknn_param <- TRUE
   k_neighbors_model <- NULL
-
   if(input$model == "knn"){
     tuning_method_knn <- if(!is.null(input$tuning_method_knn)) input$tuning_method_knn else "traditional"
     autotuneknn_param <- (tuning_method_knn != "manual")
@@ -935,8 +942,8 @@ MODEL<-reactive({
       k_neighbors_model <- input$kneighbors
     }
   }
-
-  # Determine if GridSearchCV should be used based on tuning method
+  
+  # Déterminer si GridSearchCV doit être utilisé
   use_gridsearch_param <- FALSE
   if(input$model == "randomforest" && !is.null(input$tuning_method_rf) && input$tuning_method_rf == "gridsearch"){
     use_gridsearch_param <- TRUE
@@ -949,34 +956,126 @@ MODEL<-reactive({
   } else if(input$model == "knn" && !is.null(input$tuning_method_knn) && input$tuning_method_knn == "gridsearch"){
     use_gridsearch_param <- TRUE
   }
-
-  modelparameters<<-list("modeltype"=input$model,"invers"=F,"thresholdmodel"=input$thresholdmodel,
-                         "fs"=input$fs,"adjustval"=input$adjustval,
-                         "use_gridsearch"=use_gridsearch_param,
-                         "alpha"=alpha_model,"lambda"=lambda_model,
-                         "ntree"=ntree_model,"autotunerf"=autotunerf_param,"mtry"=mtry_model,
-                         "autotunesvm"=autotunesvm_param,"cost"=cost_model,"gamma"=gamma_model,
-                         "kernel"= kernel_model , #ifelse(is.null(kernel_model),"radial",kernel_model),
-                         "autotunexgb"=autotunexgb_param,"nrounds"=nrounds_model,
-                         "max_depth"=maxdepth_model,"eta"=eta_model,
-                         "autotunelgb"=autotunelgb_param,"nrounds_lgb"=nrounds_lgb_model,
-                         "num_leaves"=num_leaves_model,"learning_rate_lgb"=learning_rate_lgb_model,
-                         "autotuneknn"=autotuneknn_param,"k_neighbors"=k_neighbors_model)
-  print(ncol(learningmodel))
-  validate(need(ncol(learningmodel)>1,"Not enough features"))
-
-
-  resmodel<<-modelfunction(learningmodel = learningmodel,validation = validation,
-                           modelparameters = modelparameters,
-                           transformdataparameters = transformdataparameters,
-                           datastructuresfeatures =  datastructuresfeatures,
-                           learningselect = learningselect)
   
- list("DATALEARNINGMODEL"=resmodel$datalearningmodel,"MODEL"=resmodel$model,
-      "DATAVALIDATIONMODEL"=resmodel$datavalidationmodel,
-      "GROUPS"=resmodel$groups,"modelparameters"=resmodel$modelparameters)
+  # *** IMPORTANT : Ne PAS inclure thresholdmodel ici ***
+  modelparameters <- list(
+    "modeltype" = input$model,
+    "invers" = FALSE,
+    # Pas de thresholdmodel !
+    "fs" = input$fs,
+    "adjustval" = input$adjustval,
+    "use_gridsearch" = use_gridsearch_param,
+    "alpha" = alpha_model,
+    "lambda" = lambda_model,
+    "ntree" = ntree_model,
+    "autotunerf" = autotunerf_param,
+    "mtry" = mtry_model,
+    "autotunesvm" = autotunesvm_param,
+    "cost" = cost_model,
+    "gamma" = gamma_model,
+    "kernel" = kernel_model,
+    "autotunexgb" = autotunexgb_param,
+    "nrounds" = nrounds_model,
+    "max_depth" = maxdepth_model,
+    "eta" = eta_model,
+    "autotunelgb" = autotunelgb_param,
+    "nrounds_lgb" = nrounds_lgb_model,
+    "num_leaves" = num_leaves_model,
+    "learning_rate_lgb" = learning_rate_lgb_model,
+    "autotuneknn" = autotuneknn_param,
+    "k_neighbors" = k_neighbors_model
+  )
   
-  })
+  validate(need(ncol(learningmodel) > 1, "Not enough features"))
+  
+  # Appeler la fonction d'entraînement (version modifiée qui retourne les scores)
+  resmodel <- modelfunction_base(
+    learningmodel = learningmodel,
+    validation = validation,
+    modelparameters = modelparameters,
+    transformdataparameters = transformdataparameters,
+    datastructuresfeatures = datastructuresfeatures,
+    learningselect = learningselect
+  )
+  
+  return(resmodel)
+})
+
+MODEL_WITH_THRESHOLD <- reactive({
+  # Obtenir le modèle de base (avec scores)
+  base_model <- BASE_MODEL()
+  
+  # Obtenir le seuil actuel
+  threshold <- input$thresholdmodel
+  
+  # Appliquer le seuil aux scores
+  # Pour learning set
+  scorelearning <- base_model$scores_learning
+  lev <- base_model$levels
+  
+  predictclasslearning <- factor(levels = lev)
+  predictclasslearning[which(scorelearning >= threshold)] <- lev["positif"]
+  predictclasslearning[which(scorelearning < threshold)] <- lev["negatif"]
+  predictclasslearning <- as.factor(predictclasslearning)
+  
+  # Pour validation set (si disponible)
+  if(!is.null(base_model$scores_validation)){
+    scorevalidation <- base_model$scores_validation
+    predictclassvalidation <- factor(levels = lev)
+    predictclassvalidation[which(scorevalidation >= threshold)] <- lev["positif"]
+    predictclassvalidation[which(scorevalidation < threshold)] <- lev["negatif"]
+    predictclassvalidation <- as.factor(predictclassvalidation)
+  } else {
+    predictclassvalidation <- NULL
+    scorevalidation <- NULL
+  }
+  
+  # Construire les résultats dans le même format que l'ancien MODEL()
+  reslearningmodel <- list(
+    "scorelearning" = scorelearning,
+    "predictclasslearning" = predictclasslearning,
+    "classlearning" = base_model$true_class_learning
+  )
+  
+  datalearningmodel <- list(
+    "learningmodel" = base_model$learningmodel,
+    "reslearningmodel" = reslearningmodel
+  )
+  
+  if(!is.null(base_model$validationmodel)){
+    resvalidationmodel <- list(
+      "scoreval" = scorevalidation,
+      "predictclassval" = predictclassvalidation,
+      "classval" = base_model$true_class_validation
+    )
+    
+    datavalidationmodel <- list(
+      "validationmodel" = base_model$validationmodel,
+      "resvalidationmodel" = resvalidationmodel
+    )
+  } else {
+    datavalidationmodel <- NULL
+  }
+  
+  # Retourner dans le format attendu par les outputs
+  return(list(
+    "DATALEARNINGMODEL" = datalearningmodel,
+    "MODEL" = base_model$model,
+    "DATAVALIDATIONMODEL" = datavalidationmodel,
+    "GROUPS" = lev,
+    "modelparameters" = base_model$modelparameters
+  ))
+})
+
+MODEL <- reactive({
+  # Simplement retourner MODEL_WITH_THRESHOLD()
+  MODEL_WITH_THRESHOLD()
+})
+
+# Alternativement, vous pouvez remplacer toutes les références MODEL() 
+# par MODEL_WITH_THRESHOLD() dans le reste du fichier server.R
+
+
 
 
 observe({
@@ -1934,3 +2033,4 @@ output$downloadplottestparametersboth = downloadHandler(
 }) 
 
 # 
+
