@@ -3352,8 +3352,12 @@ modelfunction_base <-  function(learningmodel,
 
     # Rename first column to "group" for consistency
     colnames(learningmodel)[1] <- "group"
+    # Make all column names valid R variable names
+    colnames(learningmodel) <- make.names(colnames(learningmodel), unique = TRUE)
+
     if(!is.null(validation)){
       colnames(validation)[1] <- "group"
+      colnames(validation) <- make.names(colnames(validation), unique = TRUE)
     }
 
     lev <- levels(learningmodel[,1])
