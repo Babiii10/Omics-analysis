@@ -3362,7 +3362,7 @@ modelfunction_base <- function(learningmodel, validation, modelparameters,
       validation <- cbind(validation, dfmissing)
     }
     
-    validationmodel <- validation[, c("group", nameslearning)]
+    validationmodel <- validation[, c(colnames(validation)[1], nameslearning)]
     
     # Transformation des données de validation
     if(modelparameters$adjustval){
