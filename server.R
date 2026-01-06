@@ -71,6 +71,7 @@ shinyServer(function(input, output,session) {
 #Save state#############  
   state <- reactiveValues()
   observe({
+    req(MODEL())
     importparameters<<-list("learningfile"=input$learningfile,
                             "validationfile"=input$validationfile,
                             "modelfile"=input$modelfile,
@@ -1018,6 +1019,7 @@ MODEL_WITH_THRESHOLD <- reactive({
 # MODEL: Interface principale (utilise MODEL_WITH_THRESHOLD)
 # ============================================================
 MODEL <- reactive({
+  req(MODEL_WITH_THRESHOLD())
   MODEL_WITH_THRESHOLD()
 })
 
@@ -1977,5 +1979,6 @@ output$downloadplottestparametersboth = downloadHandler(
 }) 
 
 # 
+
 
 
