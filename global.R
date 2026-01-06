@@ -3336,572 +3336,572 @@ apply_threshold <- function(model_result, new_threshold, groups = NULL) {
   ))
 }
 
-
 modelfunction_base <- function(learningmodel, validation, modelparameters,
                                transformdataparameters, datastructuresfeatures,
                                learningselect) {
-  #' Entraîne le modèle et retourne les SCORES (pas les classes prédites)
-  #' Cette fonction ne dépend PAS du threshold
-  #' Le threshold sera appliqué plus tard dans server.R
-  
-  # Initialisation
-  lev <- levels(learningmodel[,1])
-  names(lev) <- c("positif", "negatif")
-  
-  # Préparer les données de validation si disponibles
-  validationmodel <- NULL
-  if(!is.null(validation)){
-    nameslearning <- colnames(learningmodel)[-1]
-    namesvalidation <- colnames(validation)[-1]
+  if(modelparameters$modeltype!="nomodel"){
     
-    # Ajuster les colonnes de validation
-    if(!all(nameslearning %in% namesvalidation)){
-      missingvars <- nameslearning[which(!nameslearning %in% namesvalidation)]
-      dfmissing <- data.frame(matrix(data = 0, nrow = nrow(validation), ncol = length(missingvars)))
-      colnames(dfmissing) <- missingvars
-      validation <- cbind(validation, dfmissing)
+    #' Entraîne le modèle et retourne les SCORES (pas les classes prédites)
+    #' Cette fonction ne dépend PAS du threshold
+    #' Le threshold sera appliqué plus tard dans server.R
+    
+    # Initialisation
+    lev <- levels(learningmodel[,1])
+    names(lev) <- c("positif", "negatif")
+    
+    # Préparer les données de validation si disponibles
+    validationmodel <- NULL
+    if(!is.null(validation)){
+      nameslearning <- colnames(learningmodel)[-1]
+      namesvalidation <- colnames(validation)[-1]
+      
+      # Ajuster les colonnes de validation
+      if(!all(nameslearning %in% namesvalidation)){
+        missingvars <- nameslearning[which(!nameslearning %in% namesvalidation)]
+        dfmissing <- data.frame(matrix(data = 0, nrow = nrow(validation), ncol = length(missingvars)))
+        colnames(dfmissing) <- missingvars
+        validation <- cbind(validation, dfmissing)
+      }
+      
+      validationmodel <- validation[, c(colnames(validation)[1], nameslearning)]
+      
+      # Transformation des données de validation
+      if(modelparameters$adjustval){
+        validationmodel <- transformdatafunction(
+          learningselect = validationmodel,
+          structuredfeatures = NULL,
+          datastructuresfeatures = NULL,
+          transformdataparameters = transformdataparameters
+        )
+        validationmodel <- validationmodel[, colnames(learningmodel)]
+      }
+      
+      validationmodel[,1] <- factor(validationmodel[,1], levels = lev)
     }
     
-    validationmodel <- validation[, c(colnames(validation)[1], nameslearning)]
+    # =========================================================================
+    # ENTRAÎNEMENT DU MODÈLE - POUR CHAQUE TYPE DE MODÈLE
+    # =========================================================================
     
-    # Transformation des données de validation
-    if(modelparameters$adjustval){
-      validationmodel <- transformdatafunction(
-        learningselect = validationmodel,
-        structuredfeatures = NULL,
-        datastructuresfeatures = NULL,
-        transformdataparameters = transformdataparameters
-      )
-      validationmodel <- validationmodel[, colnames(learningmodel)]
-    }
-    
-    validationmodel[,1] <- factor(validationmodel[,1], levels = lev)
-  }
-  
-  # =========================================================================
-  # ENTRAÎNEMENT DU MODÈLE - POUR CHAQUE TYPE DE MODÈLE
-  # =========================================================================
-  
-  if(modelparameters$modeltype == "randomforest"){
-    # Random Forest
-    cat("Training Random Forest model...\n")
-    
-    if(is.null(modelparameters$autotunerf) || modelparameters$autotunerf){
-      # Tuning automatique
-      set.seed(20011203)
-      ntree_param <- 500
+    if(modelparameters$modeltype == "randomforest"){
+      # Random Forest
+      cat("Training Random Forest model...\n")
       
-      # Trouver le mtry optimal
-      p <- ncol(learningmodel) - 1
-      max_mtry <- min(p, 10)
-      mtry_values <- unique(c(floor(sqrt(p)), floor(p/3), floor(p/2)))
-      mtry_values <- mtry_values[mtry_values <= max_mtry & mtry_values > 0]
-      
-      best_auc <- 0
-      best_mtry <- floor(sqrt(p))
-      
-      for(mtry_test in mtry_values){
-        rf_temp <- randomForest(group ~ ., data = learningmodel, 
-                                ntree = ntree_param, mtry = mtry_test)
-        pred_probs <- predict(rf_temp, learningmodel[,-1], type = "prob")[, lev["positif"]]
-        roc_obj <- roc(learningmodel[,1], pred_probs, levels = lev)
-        auc_value <- auc(roc_obj)
+      if(is.null(modelparameters$autotunerf) || modelparameters$autotunerf){
+        # Tuning automatique
+        set.seed(20011203)
+        ntree_param <- 500
         
-        if(auc_value > best_auc){
-          best_auc <- auc_value
-          best_mtry <- mtry_test
-        }
-      }
-      
-      model <- randomForest(group ~ ., data = learningmodel,
-                            ntree = ntree_param, mtry = best_mtry)
-      model$optimal_mtry <- best_mtry
-      model$ntree_used <- ntree_param
-      
-    } else {
-      # Paramètres manuels
-      ntree_param <- ifelse(is.null(modelparameters$ntree), 500, modelparameters$ntree)
-      mtry_param <- ifelse(is.null(modelparameters$mtry), floor(sqrt(ncol(learningmodel)-1)), 
-                           modelparameters$mtry)
-      
-      model <- randomForest(group ~ ., data = learningmodel,
-                            ntree = ntree_param, mtry = mtry_param)
-      model$optimal_mtry <- mtry_param
-      model$ntree_used <- ntree_param
-    }
-    
-    # Feature selection si demandé
-    if(modelparameters$fs){
-      featureselect <- selectedfeature(model = model, modeltype = "randomforest",
-                                       tab = learningmodel,
-                                       criterionimportance = "fscore",
-                                       criterionmodel = "auc")
-      model <- featureselect$model
-      learningmodel <- featureselect$dataset
-    }
-    
-    # *** MODIFICATION CLÉE : Retourner les PROBABILITÉS, pas les classes ***
-    scorelearning <- predict(model, learningmodel[,-1], type = "prob")[, lev["positif"]]
-    scorelearning <- data.frame(scorelearning)
-    colnames(scorelearning) <- paste(lev[1], "/", lev[2], sep = "")
-    
-    # Scores pour validation
-    if(!is.null(validationmodel)){
-      scorevalidation <- predict(model, validationmodel[,-1], type = "prob")[, lev["positif"]]
-      scorevalidation <- data.frame(scorevalidation)
-      colnames(scorevalidation) <- paste(lev[1], "/", lev[2], sep = "")
-    } else {
-      scorevalidation <- NULL
-    }
-  }
-  
-  else if(modelparameters$modeltype == "svm"){
-    # SVM
-    cat("Training SVM model...\n")
-    
-    if(is.null(modelparameters$autotunesvm) || modelparameters$autotunesvm){
-      # Tuning automatique
-      set.seed(20011203)
-      tuneresult <- tune(svm, group ~ ., data = learningmodel,
-                         kernel = "radial",
-                         ranges = list(
-                           cost = c(0.01, 0.1, 1, 10, 100),
-                           gamma = c(0.001, 0.01, 0.1, 1)
-                         ),
-                         tunecontrol = tune.control(sampling = "cross", cross = 5))
-      
-      cost_param <- tuneresult$best.parameters$cost
-      gamma_param <- tuneresult$best.parameters$gamma
-    } else {
-      cost_param <- ifelse(is.null(modelparameters$cost), 1, modelparameters$cost)
-      gamma_param <- ifelse(is.null(modelparameters$gamma), 0.1, modelparameters$gamma)
-    }
-    
-    model <- svm(group ~ ., data = learningmodel,
-                 kernel = 'radial',
-                 cost = cost_param,
-                 gamma = gamma_param,
-                 type = "C-classification",
-                 probability = TRUE)
-    
-    model$cost <- cost_param
-    model$gamma <- gamma_param
-    
-    if(modelparameters$fs){
-      featureselect <- selectedfeature(model = model, modeltype = "svm",
-                                       tab = learningmodel,
-                                       criterionimportance = "fscore",
-                                       criterionmodel = "auc")
-      model <- featureselect$model
-      learningmodel <- featureselect$dataset
-    }
-    
-    # *** POUR SVM : Utiliser les decision values ***
-    scorelearning <- model$decision.values
-    if(sum(lev == (strsplit(colnames(scorelearning), split = "/")[[1]])) == 0){
-      scorelearning <- scorelearning * (-1)
-      colnames(scorelearning) <- paste(lev[1], "/", lev[2], sep = "")
-    }
-    
-    # Scores pour validation
-    if(!is.null(validationmodel)){
-      pred_val <- predict(model, validationmodel[,-1], decision.values = TRUE)
-      scorevalidation <- attr(pred_val, "decision.values")
-      if(sum(lev == (strsplit(colnames(scorevalidation), split = "/")[[1]])) == 0){
-        scorevalidation <- scorevalidation * (-1)
-        colnames(scorevalidation) <- paste(lev[1], "/", lev[2], sep = "")
-      }
-    } else {
-      scorevalidation <- NULL
-    }
-  }
-  
-  else if(modelparameters$modeltype == "elasticnet"){
-    # ElasticNet (Logistic Regression)
-    cat("Training ElasticNet model...\n")
-    
-    x <- as.matrix(learningmodel[,-1])
-    y <- ifelse(learningmodel[,1] == lev["positif"], 1, 0)
-    
-    alpha_param <- ifelse(is.null(modelparameters$alpha), 0.5, modelparameters$alpha)
-    lambda_param <- modelparameters$lambda
-    
-    if(is.null(lambda_param)){
-      set.seed(20011203)
-      cvfit <- cv.glmnet(x, y, family = "binomial", alpha = alpha_param,
-                         type.measure = "auc", 
-                         nfolds = min(10, nrow(learningmodel) - 1))
-      lambda_param <- cvfit$lambda.min
-      model <- list(glmnet_model = cvfit, lambda = lambda_param,
-                    alpha = alpha_param, cvfit = cvfit,
-                    optimal_lambda = lambda_param,
-                    lambda_1se = cvfit$lambda.1se)
-    } else {
-      fit <- glmnet(x, y, family = "binomial", 
-                    alpha = alpha_param, lambda = lambda_param)
-      model <- list(glmnet_model = fit, lambda = lambda_param,
-                    alpha = alpha_param, cvfit = NULL,
-                    optimal_lambda = lambda_param, lambda_1se = NULL)
-    }
-    
-    if(modelparameters$fs){
-      coef_values <- as.matrix(coef(model$glmnet_model, s = lambda_param))
-      selected_features <- rownames(coef_values)[which(coef_values[-1,1] != 0)]
-      
-      if(length(selected_features) > 0){
-        learningmodel <- learningmodel[, c("group", selected_features)]
-        x <- as.matrix(learningmodel[,-1])
+        # Trouver le mtry optimal
+        p <- ncol(learningmodel) - 1
+        max_mtry <- min(p, 10)
+        mtry_values <- unique(c(floor(sqrt(p)), floor(p/3), floor(p/2)))
+        mtry_values <- mtry_values[mtry_values <= max_mtry & mtry_values > 0]
         
-        if(is.null(modelparameters$lambda)){
-          cvfit <- cv.glmnet(x, y, family = "binomial", alpha = alpha_param,
-                             type.measure = "auc",
-                             nfolds = min(10, nrow(learningmodel) - 1))
-          lambda_param <- cvfit$lambda.min
-          fit <- glmnet(x, y, family = "binomial",
-                        alpha = alpha_param, lambda = lambda_param)
-          model <- list(glmnet_model = fit, lambda = lambda_param,
-                        alpha = alpha_param, cvfit = cvfit,
-                        optimal_lambda = lambda_param,
-                        lambda_1se = cvfit$lambda.1se)
-        } else {
-          fit <- glmnet(x, y, family = "binomial",
-                        alpha = alpha_param, lambda = lambda_param)
-          model <- list(glmnet_model = fit, lambda = lambda_param,
-                        alpha = alpha_param, cvfit = NULL,
-                        optimal_lambda = lambda_param, lambda_1se = NULL)
+        best_auc <- 0
+        best_mtry <- floor(sqrt(p))
+        
+        for(mtry_test in mtry_values){
+          rf_temp <- randomForest(group ~ ., data = learningmodel, 
+                                  ntree = ntree_param, mtry = mtry_test)
+          pred_probs <- predict(rf_temp, learningmodel[,-1], type = "prob")[, lev["positif"]]
+          roc_obj <- roc(learningmodel[,1], pred_probs, levels = lev)
+          auc_value <- auc(roc_obj)
+          
+          if(auc_value > best_auc){
+            best_auc <- auc_value
+            best_mtry <- mtry_test
+          }
         }
-      }
-    }
-    
-    # *** Probabilités pour ElasticNet ***
-    if(inherits(model$glmnet_model, "cv.glmnet")){
-      scorelearning <- as.vector(glmnet:::predict.cv.glmnet(
-        model$glmnet_model, newx = x, s = lambda_param, type = "response"))
-    } else {
-      scorelearning <- as.vector(glmnet::predict.glmnet(
-        model$glmnet_model, newx = x, s = lambda_param, type = "response"))
-    }
-    scorelearning <- data.frame(scorelearning)
-    colnames(scorelearning) <- paste(lev[1], "/", lev[2], sep = "")
-    
-    # Scores pour validation
-    if(!is.null(validationmodel)){
-      x_val <- as.matrix(validationmodel[,-1])
-      if(inherits(model$glmnet_model, "cv.glmnet")){
-        scorevalidation <- as.vector(glmnet:::predict.cv.glmnet(
-          model$glmnet_model, newx = x_val, s = lambda_param, type = "response"))
+        
+        model <- randomForest(group ~ ., data = learningmodel,
+                              ntree = ntree_param, mtry = best_mtry)
+        model$optimal_mtry <- best_mtry
+        model$ntree_used <- ntree_param
+        
       } else {
-        scorevalidation <- as.vector(glmnet::predict.glmnet(
-          model$glmnet_model, newx = x_val, s = lambda_param, type = "response"))
+        # Paramètres manuels
+        ntree_param <- ifelse(is.null(modelparameters$ntree), 500, modelparameters$ntree)
+        mtry_param <- ifelse(is.null(modelparameters$mtry), floor(sqrt(ncol(learningmodel)-1)), 
+                             modelparameters$mtry)
+        
+        model <- randomForest(group ~ ., data = learningmodel,
+                              ntree = ntree_param, mtry = mtry_param)
+        model$optimal_mtry <- mtry_param
+        model$ntree_used <- ntree_param
       }
-      scorevalidation <- data.frame(scorevalidation)
-      colnames(scorevalidation) <- paste(lev[1], "/", lev[2], sep = "")
-    } else {
-      scorevalidation <- NULL
+      
+      # Feature selection si demandé
+      if(modelparameters$fs){
+        featureselect <- selectedfeature(model = model, modeltype = "randomforest",
+                                         tab = learningmodel,
+                                         criterionimportance = "fscore",
+                                         criterionmodel = "auc")
+        model <- featureselect$model
+        learningmodel <- featureselect$dataset
+      }
+      
+      # *** MODIFICATION CLÉE : Retourner les PROBABILITÉS, pas les classes ***
+      scorelearning <- predict(model, learningmodel[,-1], type = "prob")[, lev["positif"]]
+      scorelearning <- data.frame(scorelearning)
+      colnames(scorelearning) <- paste(lev[1], "/", lev[2], sep = "")
+      
+      # Scores pour validation
+      if(!is.null(validationmodel)){
+        scorevalidation <- predict(model, validationmodel[,-1], type = "prob")[, lev["positif"]]
+        scorevalidation <- data.frame(scorevalidation)
+        colnames(scorevalidation) <- paste(lev[1], "/", lev[2], sep = "")
+      } else {
+        scorevalidation <- NULL
+      }
     }
-  }
-
-  else if(modelparameters$modeltype == "xgboost"){
-    # XGBoost
-    cat("Training XGBoost model...\n")
-
-    x <- as.matrix(learningmodel[,-1])
-    y <- ifelse(learningmodel[,1] == lev["positif"], 1, 0)
-    dtrain <- xgb.DMatrix(data = x, label = y)
-
-    if(is.null(modelparameters$autotunexgb) || modelparameters$autotunexgb){
-      # Auto-tuning
-      set.seed(20011203)
-      best_params <- list(
-        objective = "binary:logistic",
-        eval_metric = "auc",
-        max_depth = 6,
-        eta = 0.3,
-        min_child_weight = 1
-      )
-
-      cv_results <- xgb.cv(
-        params = best_params,
-        data = dtrain,
-        nrounds = 200,
-        nfold = min(5, nrow(learningmodel)-1),
-        early_stopping_rounds = 10,
-        verbose = 0
-      )
-
-      optimal_nrounds <- cv_results$best_iteration
-      model <- xgb.train(
-        params = best_params,
-        data = dtrain,
-        nrounds = optimal_nrounds,
-        verbose = 0
-      )
-      model$optimal_nrounds <- optimal_nrounds
-      model$optimal_max_depth <- best_params$max_depth
-      model$optimal_eta <- best_params$eta
-    } else {
-      # Manual parameters
-      nrounds_param <- ifelse(is.null(modelparameters$nrounds_xgb), 100, modelparameters$nrounds_xgb)
-      max_depth_param <- ifelse(is.null(modelparameters$max_depth), 6, modelparameters$max_depth)
-      eta_param <- ifelse(is.null(modelparameters$eta), 0.3, modelparameters$eta)
-
-      params <- list(
-        objective = "binary:logistic",
-        eval_metric = "auc",
-        max_depth = max_depth_param,
-        eta = eta_param
-      )
-
-      model <- xgb.train(
-        params = params,
-        data = dtrain,
-        nrounds = nrounds_param,
-        verbose = 0
-      )
-      model$optimal_nrounds <- nrounds_param
-      model$optimal_max_depth <- max_depth_param
-      model$optimal_eta <- eta_param
+    
+    else if(modelparameters$modeltype == "svm"){
+      # SVM
+      cat("Training SVM model...\n")
+      
+      if(is.null(modelparameters$autotunesvm) || modelparameters$autotunesvm){
+        # Tuning automatique
+        set.seed(20011203)
+        tuneresult <- tune(svm, group ~ ., data = learningmodel,
+                           kernel = "radial",
+                           ranges = list(
+                             cost = c(0.01, 0.1, 1, 10, 100),
+                             gamma = c(0.001, 0.01, 0.1, 1)
+                           ),
+                           tunecontrol = tune.control(sampling = "cross", cross = 5))
+        
+        cost_param <- tuneresult$best.parameters$cost
+        gamma_param <- tuneresult$best.parameters$gamma
+      } else {
+        cost_param <- ifelse(is.null(modelparameters$cost), 1, modelparameters$cost)
+        gamma_param <- ifelse(is.null(modelparameters$gamma), 0.1, modelparameters$gamma)
+      }
+      
+      model <- svm(group ~ ., data = learningmodel,
+                   kernel = 'radial',
+                   cost = cost_param,
+                   gamma = gamma_param,
+                   type = "C-classification",
+                   probability = TRUE)
+      
+      model$cost <- cost_param
+      model$gamma <- gamma_param
+      
+      if(modelparameters$fs){
+        featureselect <- selectedfeature(model = model, modeltype = "svm",
+                                         tab = learningmodel,
+                                         criterionimportance = "fscore",
+                                         criterionmodel = "auc")
+        model <- featureselect$model
+        learningmodel <- featureselect$dataset
+      }
+      
+      # *** POUR SVM : Utiliser les decision values ***
+      scorelearning <- model$decision.values
+      if(sum(lev == (strsplit(colnames(scorelearning), split = "/")[[1]])) == 0){
+        scorelearning <- scorelearning * (-1)
+        colnames(scorelearning) <- paste(lev[1], "/", lev[2], sep = "")
+      }
+      
+      # Scores pour validation
+      if(!is.null(validationmodel)){
+        pred_val <- predict(model, validationmodel[,-1], decision.values = TRUE)
+        scorevalidation <- attr(pred_val, "decision.values")
+        if(sum(lev == (strsplit(colnames(scorevalidation), split = "/")[[1]])) == 0){
+          scorevalidation <- scorevalidation * (-1)
+          colnames(scorevalidation) <- paste(lev[1], "/", lev[2], sep = "")
+        }
+      } else {
+        scorevalidation <- NULL
+      }
     }
-
-    # Feature selection if requested
-    if(modelparameters$fs){
-      importance <- xgb.importance(model = model)
-      top_features <- importance$Feature[1:min(20, nrow(importance))]
-      learningmodel <- learningmodel[, c(colnames(learningmodel)[1], top_features)]
+    
+    else if(modelparameters$modeltype == "elasticnet"){
+      # ElasticNet (Logistic Regression)
+      cat("Training ElasticNet model...\n")
+      
+      x <- as.matrix(learningmodel[,-1])
+      y <- ifelse(learningmodel[,1] == lev["positif"], 1, 0)
+      
+      alpha_param <- ifelse(is.null(modelparameters$alpha), 0.5, modelparameters$alpha)
+      lambda_param <- modelparameters$lambda
+      
+      if(is.null(lambda_param)){
+        set.seed(20011203)
+        cvfit <- cv.glmnet(x, y, family = "binomial", alpha = alpha_param,
+                           type.measure = "auc", 
+                           nfolds = min(10, nrow(learningmodel) - 1))
+        lambda_param <- cvfit$lambda.min
+        model <- list(glmnet_model = cvfit, lambda = lambda_param,
+                      alpha = alpha_param, cvfit = cvfit,
+                      optimal_lambda = lambda_param,
+                      lambda_1se = cvfit$lambda.1se)
+      } else {
+        fit <- glmnet(x, y, family = "binomial", 
+                      alpha = alpha_param, lambda = lambda_param)
+        model <- list(glmnet_model = fit, lambda = lambda_param,
+                      alpha = alpha_param, cvfit = NULL,
+                      optimal_lambda = lambda_param, lambda_1se = NULL)
+      }
+      
+      if(modelparameters$fs){
+        coef_values <- as.matrix(coef(model$glmnet_model, s = lambda_param))
+        selected_features <- rownames(coef_values)[which(coef_values[-1,1] != 0)]
+        
+        if(length(selected_features) > 0){
+          learningmodel <- learningmodel[, c("group", selected_features)]
+          x <- as.matrix(learningmodel[,-1])
+          
+          if(is.null(modelparameters$lambda)){
+            cvfit <- cv.glmnet(x, y, family = "binomial", alpha = alpha_param,
+                               type.measure = "auc",
+                               nfolds = min(10, nrow(learningmodel) - 1))
+            lambda_param <- cvfit$lambda.min
+            fit <- glmnet(x, y, family = "binomial",
+                          alpha = alpha_param, lambda = lambda_param)
+            model <- list(glmnet_model = fit, lambda = lambda_param,
+                          alpha = alpha_param, cvfit = cvfit,
+                          optimal_lambda = lambda_param,
+                          lambda_1se = cvfit$lambda.1se)
+          } else {
+            fit <- glmnet(x, y, family = "binomial",
+                          alpha = alpha_param, lambda = lambda_param)
+            model <- list(glmnet_model = fit, lambda = lambda_param,
+                          alpha = alpha_param, cvfit = NULL,
+                          optimal_lambda = lambda_param, lambda_1se = NULL)
+          }
+        }
+      }
+      
+      # *** Probabilités pour ElasticNet ***
+      if(inherits(model$glmnet_model, "cv.glmnet")){
+        scorelearning <- as.vector(glmnet:::predict.cv.glmnet(
+          model$glmnet_model, newx = x, s = lambda_param, type = "response"))
+      } else {
+        scorelearning <- as.vector(glmnet::predict.glmnet(
+          model$glmnet_model, newx = x, s = lambda_param, type = "response"))
+      }
+      scorelearning <- data.frame(scorelearning)
+      colnames(scorelearning) <- paste(lev[1], "/", lev[2], sep = "")
+      
+      # Scores pour validation
+      if(!is.null(validationmodel)){
+        x_val <- as.matrix(validationmodel[,-1])
+        if(inherits(model$glmnet_model, "cv.glmnet")){
+          scorevalidation <- as.vector(glmnet:::predict.cv.glmnet(
+            model$glmnet_model, newx = x_val, s = lambda_param, type = "response"))
+        } else {
+          scorevalidation <- as.vector(glmnet::predict.glmnet(
+            model$glmnet_model, newx = x_val, s = lambda_param, type = "response"))
+        }
+        scorevalidation <- data.frame(scorevalidation)
+        colnames(scorevalidation) <- paste(lev[1], "/", lev[2], sep = "")
+      } else {
+        scorevalidation <- NULL
+      }
+    }
+    
+    else if(modelparameters$modeltype == "xgboost"){
+      # XGBoost
+      cat("Training XGBoost model...\n")
+      
       x <- as.matrix(learningmodel[,-1])
       y <- ifelse(learningmodel[,1] == lev["positif"], 1, 0)
       dtrain <- xgb.DMatrix(data = x, label = y)
-
-      # Retrain with selected features
-      params <- list(
-        objective = "binary:logistic",
-        eval_metric = "auc",
-        max_depth = ifelse(!is.null(model$optimal_max_depth), model$optimal_max_depth, 6),
-        eta = ifelse(!is.null(model$optimal_eta), model$optimal_eta, 0.3)
-      )
-
-      model <- xgb.train(
-        params = params,
-        data = dtrain,
-        nrounds = model$optimal_nrounds,
-        verbose = 0
-      )
-    }
-
-    # Probabilities for XGBoost
-    scorelearning <- predict(model, x)
-    scorelearning <- data.frame(scorelearning)
-    colnames(scorelearning) <- paste(lev[1], "/", lev[2], sep = "")
-
-    # Scores for validation
-    if(!is.null(validationmodel)){
-      x_val <- as.matrix(validationmodel[,-1])
-      scorevalidation <- predict(model, x_val)
-      scorevalidation <- data.frame(scorevalidation)
-      colnames(scorevalidation) <- paste(lev[1], "/", lev[2], sep = "")
-    } else {
-      scorevalidation <- NULL
-    }
-  }
-
-  else if(modelparameters$modeltype == "lightgbm"){
-    # LightGBM
-    cat("Training LightGBM model...\n")
-
-    x <- as.matrix(learningmodel[,-1])
-    y <- ifelse(learningmodel[,1] == lev["positif"], 1, 0)
-    dtrain <- lgb.Dataset(data = x, label = y)
-
-    if(is.null(modelparameters$autotunelgb) || modelparameters$autotunelgb){
-      # Auto-tuning
-      set.seed(20011203)
-      best_params <- list(
-        objective = "binary",
-        metric = "auc",
-        num_leaves = 31,
-        learning_rate = 0.05,
-        feature_fraction = 0.9,
-        bagging_fraction = 0.8,
-        bagging_freq = 5,
-        verbose = -1
-      )
-
-      cv_results <- lgb.cv(
-        params = best_params,
-        data = dtrain,
-        nrounds = 200,
-        nfold = min(5, nrow(learningmodel)-1),
-        early_stopping_rounds = 10,
-        verbose = -1
-      )
-
-      optimal_nrounds <- cv_results$best_iter
-      model <- lgb.train(
-        params = best_params,
-        data = dtrain,
-        nrounds = optimal_nrounds,
-        verbose = -1
-      )
-      model$optimal_nrounds <- optimal_nrounds
-    } else {
-      # Manual parameters
-      nrounds_param <- ifelse(is.null(modelparameters$nrounds_lgb), 100, modelparameters$nrounds_lgb)
-      num_leaves_param <- ifelse(is.null(modelparameters$num_leaves), 31, modelparameters$num_leaves)
-      learning_rate_param <- ifelse(is.null(modelparameters$learning_rate_lgb), 0.05, modelparameters$learning_rate_lgb)
-
-      params <- list(
-        objective = "binary",
-        metric = "auc",
-        num_leaves = num_leaves_param,
-        learning_rate = learning_rate_param,
-        feature_fraction = 0.9,
-        bagging_fraction = 0.8,
-        bagging_freq = 5,
-        verbose = -1
-      )
-
-      model <- lgb.train(
-        params = params,
-        data = dtrain,
-        nrounds = nrounds_param,
-        verbose = -1
-      )
-      model$optimal_nrounds <- nrounds_param
-    }
-
-    # Probabilities for LightGBM
-    scorelearning <- predict(model, x)
-    scorelearning <- data.frame(scorelearning)
-    colnames(scorelearning) <- paste(lev[1], "/", lev[2], sep = "")
-
-    # Scores for validation
-    if(!is.null(validationmodel)){
-      x_val <- as.matrix(validationmodel[,-1])
-      scorevalidation <- predict(model, x_val)
-      scorevalidation <- data.frame(scorevalidation)
-      colnames(scorevalidation) <- paste(lev[1], "/", lev[2], sep = "")
-    } else {
-      scorevalidation <- NULL
-    }
-  }
-
-  else if(modelparameters$modeltype == "naivebayes"){
-    # Naive Bayes
-    cat("Training Naive Bayes model...\n")
-
-    optimal_laplace <- ifelse(is.null(modelparameters$laplace), 0, modelparameters$laplace)
-    model <- naiveBayes(x = learningmodel[,-1], y = learningmodel[,1], laplace = optimal_laplace)
-    model$model_type <- "naivebayes"
-    model$optimal_laplace <- optimal_laplace
-
-    # Probabilities for Naive Bayes
-    pred_probs <- predict(model, learningmodel[,-1], type="raw")
-    scorelearning <- data.frame(pred_probs[, lev["positif"]])
-    colnames(scorelearning) <- paste(lev[1], "/", lev[2], sep = "")
-
-    # Scores for validation
-    if(!is.null(validationmodel)){
-      pred_probs_val <- predict(model, validationmodel[,-1], type="raw")
-      scorevalidation <- data.frame(pred_probs_val[, lev["positif"]])
-      colnames(scorevalidation) <- paste(lev[1], "/", lev[2], sep = "")
-    } else {
-      scorevalidation <- NULL
-    }
-  }
-
-  else if(modelparameters$modeltype == "knn"){
-    # K-Nearest Neighbors
-    cat("Training KNN model...\n")
-
-    if(is.null(modelparameters$autotuneknn) || modelparameters$autotuneknn){
-      # Auto-tuning
-      set.seed(20011203)
-      max_k <- min(floor(sqrt(nrow(learningmodel))), 20)
-      k_values <- seq(3, max_k, by=2)
-
-      best_k <- 3
-      best_acc <- 0
-      for(k_test in k_values){
-        n_folds <- min(5, nrow(learningmodel))
-        fold_size <- floor(nrow(learningmodel) / n_folds)
-        accuracies <- numeric(n_folds)
-        for(fold in 1:n_folds){
-          test_idx <- ((fold-1)*fold_size + 1):min(fold*fold_size, nrow(learningmodel))
-          train_idx <- setdiff(1:nrow(learningmodel), test_idx)
-          pred <- knn(train = learningmodel[train_idx, -1],
-                     test = learningmodel[test_idx, -1],
-                     cl = learningmodel[train_idx, 1],
-                     k = k_test)
-          accuracies[fold] <- mean(pred == learningmodel[test_idx, 1])
-        }
-        avg_acc <- mean(accuracies)
-        if(avg_acc > best_acc){
-          best_acc <- avg_acc
-          best_k <- k_test
-        }
+      
+      if(is.null(modelparameters$autotunexgb) || modelparameters$autotunexgb){
+        # Auto-tuning
+        set.seed(20011203)
+        best_params <- list(
+          objective = "binary:logistic",
+          eval_metric = "auc",
+          max_depth = 6,
+          eta = 0.3,
+          min_child_weight = 1
+        )
+        
+        cv_results <- xgb.cv(
+          params = best_params,
+          data = dtrain,
+          nrounds = 200,
+          nfold = min(5, nrow(learningmodel)-1),
+          early_stopping_rounds = 10,
+          verbose = 0
+        )
+        
+        optimal_nrounds <- cv_results$best_iteration
+        model <- xgb.train(
+          params = best_params,
+          data = dtrain,
+          nrounds = optimal_nrounds,
+          verbose = 0
+        )
+        model$optimal_nrounds <- optimal_nrounds
+        model$optimal_max_depth <- best_params$max_depth
+        model$optimal_eta <- best_params$eta
+      } else {
+        # Manual parameters
+        nrounds_param <- ifelse(is.null(modelparameters$nrounds_xgb), 100, modelparameters$nrounds_xgb)
+        max_depth_param <- ifelse(is.null(modelparameters$max_depth), 6, modelparameters$max_depth)
+        eta_param <- ifelse(is.null(modelparameters$eta), 0.3, modelparameters$eta)
+        
+        params <- list(
+          objective = "binary:logistic",
+          eval_metric = "auc",
+          max_depth = max_depth_param,
+          eta = eta_param
+        )
+        
+        model <- xgb.train(
+          params = params,
+          data = dtrain,
+          nrounds = nrounds_param,
+          verbose = 0
+        )
+        model$optimal_nrounds <- nrounds_param
+        model$optimal_max_depth <- max_depth_param
+        model$optimal_eta <- eta_param
       }
-      optimal_k <- best_k
-    } else {
-      # Manual k parameter
-      optimal_k <- ifelse(is.null(modelparameters$k_neighbors), 5, modelparameters$k_neighbors)
+      
+      # Feature selection if requested
+      if(modelparameters$fs){
+        importance <- xgb.importance(model = model)
+        top_features <- importance$Feature[1:min(20, nrow(importance))]
+        learningmodel <- learningmodel[, c(colnames(learningmodel)[1], top_features)]
+        x <- as.matrix(learningmodel[,-1])
+        y <- ifelse(learningmodel[,1] == lev["positif"], 1, 0)
+        dtrain <- xgb.DMatrix(data = x, label = y)
+        
+        # Retrain with selected features
+        params <- list(
+          objective = "binary:logistic",
+          eval_metric = "auc",
+          max_depth = ifelse(!is.null(model$optimal_max_depth), model$optimal_max_depth, 6),
+          eta = ifelse(!is.null(model$optimal_eta), model$optimal_eta, 0.3)
+        )
+        
+        model <- xgb.train(
+          params = params,
+          data = dtrain,
+          nrounds = model$optimal_nrounds,
+          verbose = 0
+        )
+      }
+      
+      # Probabilities for XGBoost
+      scorelearning <- predict(model, x)
+      scorelearning <- data.frame(scorelearning)
+      colnames(scorelearning) <- paste(lev[1], "/", lev[2], sep = "")
+      
+      # Scores for validation
+      if(!is.null(validationmodel)){
+        x_val <- as.matrix(validationmodel[,-1])
+        scorevalidation <- predict(model, x_val)
+        scorevalidation <- data.frame(scorevalidation)
+        colnames(scorevalidation) <- paste(lev[1], "/", lev[2], sep = "")
+      } else {
+        scorevalidation <- NULL
+      }
     }
-
-    # Store KNN model
-    model <- list(
-      train_data = learningmodel[,-1],
-      train_labels = learningmodel[,1],
-      optimal_k = optimal_k,
-      model_type = "knn"
-    )
-
-    # Calculate probability scores for learning set
-    scorelearning_vec <- numeric(nrow(learningmodel))
-    for(i in 1:nrow(learningmodel)){
-      train_idx <- setdiff(1:nrow(learningmodel), i)
-      distances <- apply(learningmodel[train_idx, -1], 1, function(row) {
-        sqrt(sum((as.numeric(learningmodel[i, -1]) - as.numeric(row))^2))
-      })
-      k_nearest_idx <- order(distances)[1:optimal_k]
-      k_nearest_labels <- learningmodel[train_idx, 1][k_nearest_idx]
-      scorelearning_vec[i] <- sum(k_nearest_labels == lev["positif"]) / optimal_k
+    
+    else if(modelparameters$modeltype == "lightgbm"){
+      # LightGBM
+      cat("Training LightGBM model...\n")
+      
+      x <- as.matrix(learningmodel[,-1])
+      y <- ifelse(learningmodel[,1] == lev["positif"], 1, 0)
+      dtrain <- lgb.Dataset(data = x, label = y)
+      
+      if(is.null(modelparameters$autotunelgb) || modelparameters$autotunelgb){
+        # Auto-tuning
+        set.seed(20011203)
+        best_params <- list(
+          objective = "binary",
+          metric = "auc",
+          num_leaves = 31,
+          learning_rate = 0.05,
+          feature_fraction = 0.9,
+          bagging_fraction = 0.8,
+          bagging_freq = 5,
+          verbose = -1
+        )
+        
+        cv_results <- lgb.cv(
+          params = best_params,
+          data = dtrain,
+          nrounds = 200,
+          nfold = min(5, nrow(learningmodel)-1),
+          early_stopping_rounds = 10,
+          verbose = -1
+        )
+        
+        optimal_nrounds <- cv_results$best_iter
+        model <- lgb.train(
+          params = best_params,
+          data = dtrain,
+          nrounds = optimal_nrounds,
+          verbose = -1
+        )
+        model$optimal_nrounds <- optimal_nrounds
+      } else {
+        # Manual parameters
+        nrounds_param <- ifelse(is.null(modelparameters$nrounds_lgb), 100, modelparameters$nrounds_lgb)
+        num_leaves_param <- ifelse(is.null(modelparameters$num_leaves), 31, modelparameters$num_leaves)
+        learning_rate_param <- ifelse(is.null(modelparameters$learning_rate_lgb), 0.05, modelparameters$learning_rate_lgb)
+        
+        params <- list(
+          objective = "binary",
+          metric = "auc",
+          num_leaves = num_leaves_param,
+          learning_rate = learning_rate_param,
+          feature_fraction = 0.9,
+          bagging_fraction = 0.8,
+          bagging_freq = 5,
+          verbose = -1
+        )
+        
+        model <- lgb.train(
+          params = params,
+          data = dtrain,
+          nrounds = nrounds_param,
+          verbose = -1
+        )
+        model$optimal_nrounds <- nrounds_param
+      }
+      
+      # Probabilities for LightGBM
+      scorelearning <- predict(model, x)
+      scorelearning <- data.frame(scorelearning)
+      colnames(scorelearning) <- paste(lev[1], "/", lev[2], sep = "")
+      
+      # Scores for validation
+      if(!is.null(validationmodel)){
+        x_val <- as.matrix(validationmodel[,-1])
+        scorevalidation <- predict(model, x_val)
+        scorevalidation <- data.frame(scorevalidation)
+        colnames(scorevalidation) <- paste(lev[1], "/", lev[2], sep = "")
+      } else {
+        scorevalidation <- NULL
+      }
     }
-    scorelearning <- data.frame(scorelearning_vec)
-    colnames(scorelearning) <- paste(lev[1], "/", lev[2], sep = "")
-
-    # Scores for validation
-    if(!is.null(validationmodel)){
-      scorevalidation_vec <- numeric(nrow(validationmodel))
-      for(i in 1:nrow(validationmodel)){
-        distances <- apply(learningmodel[, -1], 1, function(row) {
-          sqrt(sum((as.numeric(validationmodel[i, -1]) - as.numeric(row))^2))
+    
+    else if(modelparameters$modeltype == "naivebayes"){
+      # Naive Bayes
+      cat("Training Naive Bayes model...\n")
+      
+      optimal_laplace <- ifelse(is.null(modelparameters$laplace), 0, modelparameters$laplace)
+      model <- naiveBayes(x = learningmodel[,-1], y = learningmodel[,1], laplace = optimal_laplace)
+      model$model_type <- "naivebayes"
+      model$optimal_laplace <- optimal_laplace
+      
+      # Probabilities for Naive Bayes
+      pred_probs <- predict(model, learningmodel[,-1], type="raw")
+      scorelearning <- data.frame(pred_probs[, lev["positif"]])
+      colnames(scorelearning) <- paste(lev[1], "/", lev[2], sep = "")
+      
+      # Scores for validation
+      if(!is.null(validationmodel)){
+        pred_probs_val <- predict(model, validationmodel[,-1], type="raw")
+        scorevalidation <- data.frame(pred_probs_val[, lev["positif"]])
+        colnames(scorevalidation) <- paste(lev[1], "/", lev[2], sep = "")
+      } else {
+        scorevalidation <- NULL
+      }
+    }
+    
+    else if(modelparameters$modeltype == "knn"){
+      # K-Nearest Neighbors
+      cat("Training KNN model...\n")
+      
+      if(is.null(modelparameters$autotuneknn) || modelparameters$autotuneknn){
+        # Auto-tuning
+        set.seed(20011203)
+        max_k <- min(floor(sqrt(nrow(learningmodel))), 20)
+        k_values <- seq(3, max_k, by=2)
+        
+        best_k <- 3
+        best_acc <- 0
+        for(k_test in k_values){
+          n_folds <- min(5, nrow(learningmodel))
+          fold_size <- floor(nrow(learningmodel) / n_folds)
+          accuracies <- numeric(n_folds)
+          for(fold in 1:n_folds){
+            test_idx <- ((fold-1)*fold_size + 1):min(fold*fold_size, nrow(learningmodel))
+            train_idx <- setdiff(1:nrow(learningmodel), test_idx)
+            pred <- knn(train = learningmodel[train_idx, -1],
+                        test = learningmodel[test_idx, -1],
+                        cl = learningmodel[train_idx, 1],
+                        k = k_test)
+            accuracies[fold] <- mean(pred == learningmodel[test_idx, 1])
+          }
+          avg_acc <- mean(accuracies)
+          if(avg_acc > best_acc){
+            best_acc <- avg_acc
+            best_k <- k_test
+          }
+        }
+        optimal_k <- best_k
+      } else {
+        # Manual k parameter
+        optimal_k <- ifelse(is.null(modelparameters$k_neighbors), 5, modelparameters$k_neighbors)
+      }
+      
+      # Store KNN model
+      model <- list(
+        train_data = learningmodel[,-1],
+        train_labels = learningmodel[,1],
+        optimal_k = optimal_k,
+        model_type = "knn"
+      )
+      
+      # Calculate probability scores for learning set
+      scorelearning_vec <- numeric(nrow(learningmodel))
+      for(i in 1:nrow(learningmodel)){
+        train_idx <- setdiff(1:nrow(learningmodel), i)
+        distances <- apply(learningmodel[train_idx, -1], 1, function(row) {
+          sqrt(sum((as.numeric(learningmodel[i, -1]) - as.numeric(row))^2))
         })
         k_nearest_idx <- order(distances)[1:optimal_k]
-        k_nearest_labels <- learningmodel[, 1][k_nearest_idx]
-        scorevalidation_vec[i] <- sum(k_nearest_labels == lev["positif"]) / optimal_k
+        k_nearest_labels <- learningmodel[train_idx, 1][k_nearest_idx]
+        scorelearning_vec[i] <- sum(k_nearest_labels == lev["positif"]) / optimal_k
       }
-      scorevalidation <- data.frame(scorevalidation_vec)
-      colnames(scorevalidation) <- paste(lev[1], "/", lev[2], sep = "")
-    } else {
-      scorevalidation <- NULL
+      scorelearning <- data.frame(scorelearning_vec)
+      colnames(scorelearning) <- paste(lev[1], "/", lev[2], sep = "")
+      
+      # Scores for validation
+      if(!is.null(validationmodel)){
+        scorevalidation_vec <- numeric(nrow(validationmodel))
+        for(i in 1:nrow(validationmodel)){
+          distances <- apply(learningmodel[, -1], 1, function(row) {
+            sqrt(sum((as.numeric(validationmodel[i, -1]) - as.numeric(row))^2))
+          })
+          k_nearest_idx <- order(distances)[1:optimal_k]
+          k_nearest_labels <- learningmodel[, 1][k_nearest_idx]
+          scorevalidation_vec[i] <- sum(k_nearest_labels == lev["positif"]) / optimal_k
+        }
+        scorevalidation <- data.frame(scorevalidation_vec)
+        colnames(scorevalidation) <- paste(lev[1], "/", lev[2], sep = "")
+      } else {
+        scorevalidation <- NULL
+      }
     }
+    
+    # =========================================================================
+    # RETOURNER LES RÉSULTATS (AVEC SCORES, PAS CLASSES)
+    # =========================================================================
+    
+    return(list(
+      "model" = model,
+      "scores_learning" = scorelearning,
+      "scores_validation" = scorevalidation,
+      "true_class_learning" = learningmodel[,1],
+      "true_class_validation" = if(!is.null(validationmodel)) validationmodel[,1] else NULL,
+      "levels" = lev,
+      "learningmodel" = learningmodel,
+      "validationmodel" = validationmodel,
+      "modelparameters" = modelparameters
+    ))
+    
   }
-
-  # =========================================================================
-  # RETOURNER LES RÉSULTATS (AVEC SCORES, PAS CLASSES)
-  # =========================================================================
-  
-  return(list(
-    "model" = model,
-    "scores_learning" = scorelearning,
-    "scores_validation" = scorevalidation,
-    "true_class_learning" = learningmodel[,1],
-    "true_class_validation" = if(!is.null(validationmodel)) validationmodel[,1] else NULL,
-    "levels" = lev,
-    "learningmodel" = learningmodel,
-    "validationmodel" = validationmodel,
-    "modelparameters" = modelparameters
-  ))
 }
-
-
-
