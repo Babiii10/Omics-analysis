@@ -845,7 +845,14 @@ output$donwloadPCAPlot =  downloadHandler(
 
 
 ######
-MODEL<-reactive({
+# ============================================================
+# ARCHITECTURE DE SÉPARATION SEUIL / HYPERPARAMÈTRES
+# BASE_MODEL: Entraîne le modèle (déclenché par changement d'hyperparamètres)
+# MODEL_WITH_THRESHOLD: Applique le seuil (déclenché par changement de seuil)
+# MODEL: Interface principale
+# ============================================================
+
+BASE_MODEL<-reactive({
   if(input$test=="notest"){learningmodel<<-TRANSFORMDATA()$LEARNINGTRANSFORM}
   else{learningmodel<<-TEST()$LEARNINGDIFF}
   validation<<-DATA()$VALIDATION
@@ -950,7 +957,11 @@ MODEL<-reactive({
     use_gridsearch_param <- TRUE
   }
 
-  modelparameters<<-list("modeltype"=input$model,"invers"=F,"thresholdmodel"=input$thresholdmodel,
+  # *** IMPORTANT: Utiliser un seuil par défaut (pas input$thresholdmodel) ***
+  # Le seuil de l'utilisateur sera appliqué séparément dans MODEL_WITH_THRESHOLD()
+  default_threshold <- if(input$model == "svm") 0 else 0.5
+
+  modelparameters<<-list("modeltype"=input$model,"invers"=F,"thresholdmodel"=default_threshold,
                          "fs"=input$fs,"adjustval"=input$adjustval,
                          "use_gridsearch"=use_gridsearch_param,
                          "alpha"=alpha_model,"lambda"=lambda_model,
@@ -965,18 +976,48 @@ MODEL<-reactive({
   print(ncol(learningmodel))
   validate(need(ncol(learningmodel)>1,"Not enough features"))
 
-
+  cat("=== TRAINING MODEL (hyperparameters only, threshold will be applied separately) ===\n")
   resmodel<<-modelfunction(learningmodel = learningmodel,validation = validation,
                            modelparameters = modelparameters,
                            transformdataparameters = transformdataparameters,
                            datastructuresfeatures =  datastructuresfeatures,
                            learningselect = learningselect)
-  
+  cat("=== MODEL TRAINING COMPLETE ===\n")
+
  list("DATALEARNINGMODEL"=resmodel$datalearningmodel,"MODEL"=resmodel$model,
       "DATAVALIDATIONMODEL"=resmodel$datavalidationmodel,
       "GROUPS"=resmodel$groups,"modelparameters"=resmodel$modelparameters)
-  
+
   })
+
+# ============================================================
+# MODEL_WITH_THRESHOLD: Applique le seuil aux scores (RAPIDE)
+# ============================================================
+MODEL_WITH_THRESHOLD <- reactive({
+  cat("=== APPLYING THRESHOLD (fast operation) ===\n")
+
+  # Obtenir le modèle de base (avec scores)
+  base_model <- BASE_MODEL()
+
+  # Obtenir le seuil actuel de l'utilisateur
+  threshold <- input$thresholdmodel
+  cat("Using threshold:", threshold, "\n")
+
+  # Appliquer le seuil avec la fonction existante apply_threshold()
+  result <- apply_threshold(base_model, threshold)
+
+  cat("=== THRESHOLD APPLIED ===\n\n")
+
+  # Retourner le résultat avec le seuil appliqué
+  return(result)
+})
+
+# ============================================================
+# MODEL: Interface principale (utilise MODEL_WITH_THRESHOLD)
+# ============================================================
+MODEL <- reactive({
+  MODEL_WITH_THRESHOLD()
+})
 
 
 observe({
