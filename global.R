@@ -3289,6 +3289,8 @@ apply_threshold <- function(model_result, new_threshold, groups = NULL) {
   # Update reslearningmodel with new predictions
   # Create data.frame exactly as in original modelfunction (line 2450-2451)
   reslearningmodel <- data.frame(classlearning, scorelearning, predictclasslearning)
+  cat("reslearningmodel  ncol : ", ncol(reslearningmodel), "\n")
+  cat('reslearningmodel  nrow:  ', nrow(reslearningmodel) , "\n")
   colnames(reslearningmodel) <- c("classlearning", "scorelearning", "predictclasslearning")
   
   datalearningmodel <- list(
@@ -3335,3 +3337,4 @@ apply_threshold <- function(model_result, new_threshold, groups = NULL) {
     "modelparameters" = modelparameters
   ))
 }
+
