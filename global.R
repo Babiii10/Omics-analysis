@@ -3600,21 +3600,292 @@ modelfunction_base <- function(learningmodel, validation, modelparameters,
       scorevalidation <- NULL
     }
   }
-  
-  # =========================================================================
-  # AJOUTER DES BLOCS SIMILAIRES POUR LES AUTRES MODÈLES
-  # =========================================================================
-  # - xgboost
-  # - lightgbm
-  # - naivebayes
-  # - knn
-  # 
-  # Pour chaque modèle, suivre le même pattern :
-  # 1. Entraîner le modèle avec les hyperparamètres
-  # 2. Calculer les scores (probabilités ou decision values)
-  # 3. NE PAS appliquer le threshold
-  # 4. Retourner les scores
-  
+
+  else if(modelparameters$modeltype == "xgboost"){
+    # XGBoost
+    cat("Training XGBoost model...\n")
+
+    x <- as.matrix(learningmodel[,-1])
+    y <- ifelse(learningmodel[,1] == lev["positif"], 1, 0)
+    dtrain <- xgb.DMatrix(data = x, label = y)
+
+    if(is.null(modelparameters$autotunexgb) || modelparameters$autotunexgb){
+      # Auto-tuning
+      set.seed(20011203)
+      best_params <- list(
+        objective = "binary:logistic",
+        eval_metric = "auc",
+        max_depth = 6,
+        eta = 0.3,
+        min_child_weight = 1
+      )
+
+      cv_results <- xgb.cv(
+        params = best_params,
+        data = dtrain,
+        nrounds = 200,
+        nfold = min(5, nrow(learningmodel)-1),
+        early_stopping_rounds = 10,
+        verbose = 0
+      )
+
+      optimal_nrounds <- cv_results$best_iteration
+      model <- xgb.train(
+        params = best_params,
+        data = dtrain,
+        nrounds = optimal_nrounds,
+        verbose = 0
+      )
+      model$optimal_nrounds <- optimal_nrounds
+      model$optimal_max_depth <- best_params$max_depth
+      model$optimal_eta <- best_params$eta
+    } else {
+      # Manual parameters
+      nrounds_param <- ifelse(is.null(modelparameters$nrounds_xgb), 100, modelparameters$nrounds_xgb)
+      max_depth_param <- ifelse(is.null(modelparameters$max_depth), 6, modelparameters$max_depth)
+      eta_param <- ifelse(is.null(modelparameters$eta), 0.3, modelparameters$eta)
+
+      params <- list(
+        objective = "binary:logistic",
+        eval_metric = "auc",
+        max_depth = max_depth_param,
+        eta = eta_param
+      )
+
+      model <- xgb.train(
+        params = params,
+        data = dtrain,
+        nrounds = nrounds_param,
+        verbose = 0
+      )
+      model$optimal_nrounds <- nrounds_param
+      model$optimal_max_depth <- max_depth_param
+      model$optimal_eta <- eta_param
+    }
+
+    # Feature selection if requested
+    if(modelparameters$fs){
+      importance <- xgb.importance(model = model)
+      top_features <- importance$Feature[1:min(20, nrow(importance))]
+      learningmodel <- learningmodel[, c(colnames(learningmodel)[1], top_features)]
+      x <- as.matrix(learningmodel[,-1])
+      y <- ifelse(learningmodel[,1] == lev["positif"], 1, 0)
+      dtrain <- xgb.DMatrix(data = x, label = y)
+
+      # Retrain with selected features
+      params <- list(
+        objective = "binary:logistic",
+        eval_metric = "auc",
+        max_depth = ifelse(!is.null(model$optimal_max_depth), model$optimal_max_depth, 6),
+        eta = ifelse(!is.null(model$optimal_eta), model$optimal_eta, 0.3)
+      )
+
+      model <- xgb.train(
+        params = params,
+        data = dtrain,
+        nrounds = model$optimal_nrounds,
+        verbose = 0
+      )
+    }
+
+    # Probabilities for XGBoost
+    scorelearning <- predict(model, x)
+    scorelearning <- data.frame(scorelearning)
+    colnames(scorelearning) <- paste(lev[1], "/", lev[2], sep = "")
+
+    # Scores for validation
+    if(!is.null(validationmodel)){
+      x_val <- as.matrix(validationmodel[,-1])
+      scorevalidation <- predict(model, x_val)
+      scorevalidation <- data.frame(scorevalidation)
+      colnames(scorevalidation) <- paste(lev[1], "/", lev[2], sep = "")
+    } else {
+      scorevalidation <- NULL
+    }
+  }
+
+  else if(modelparameters$modeltype == "lightgbm"){
+    # LightGBM
+    cat("Training LightGBM model...\n")
+
+    x <- as.matrix(learningmodel[,-1])
+    y <- ifelse(learningmodel[,1] == lev["positif"], 1, 0)
+    dtrain <- lgb.Dataset(data = x, label = y)
+
+    if(is.null(modelparameters$autotunelgb) || modelparameters$autotunelgb){
+      # Auto-tuning
+      set.seed(20011203)
+      best_params <- list(
+        objective = "binary",
+        metric = "auc",
+        num_leaves = 31,
+        learning_rate = 0.05,
+        feature_fraction = 0.9,
+        bagging_fraction = 0.8,
+        bagging_freq = 5,
+        verbose = -1
+      )
+
+      cv_results <- lgb.cv(
+        params = best_params,
+        data = dtrain,
+        nrounds = 200,
+        nfold = min(5, nrow(learningmodel)-1),
+        early_stopping_rounds = 10,
+        verbose = -1
+      )
+
+      optimal_nrounds <- cv_results$best_iter
+      model <- lgb.train(
+        params = best_params,
+        data = dtrain,
+        nrounds = optimal_nrounds,
+        verbose = -1
+      )
+      model$optimal_nrounds <- optimal_nrounds
+    } else {
+      # Manual parameters
+      nrounds_param <- ifelse(is.null(modelparameters$nrounds_lgb), 100, modelparameters$nrounds_lgb)
+      num_leaves_param <- ifelse(is.null(modelparameters$num_leaves), 31, modelparameters$num_leaves)
+      learning_rate_param <- ifelse(is.null(modelparameters$learning_rate_lgb), 0.05, modelparameters$learning_rate_lgb)
+
+      params <- list(
+        objective = "binary",
+        metric = "auc",
+        num_leaves = num_leaves_param,
+        learning_rate = learning_rate_param,
+        feature_fraction = 0.9,
+        bagging_fraction = 0.8,
+        bagging_freq = 5,
+        verbose = -1
+      )
+
+      model <- lgb.train(
+        params = params,
+        data = dtrain,
+        nrounds = nrounds_param,
+        verbose = -1
+      )
+      model$optimal_nrounds <- nrounds_param
+    }
+
+    # Probabilities for LightGBM
+    scorelearning <- predict(model, x)
+    scorelearning <- data.frame(scorelearning)
+    colnames(scorelearning) <- paste(lev[1], "/", lev[2], sep = "")
+
+    # Scores for validation
+    if(!is.null(validationmodel)){
+      x_val <- as.matrix(validationmodel[,-1])
+      scorevalidation <- predict(model, x_val)
+      scorevalidation <- data.frame(scorevalidation)
+      colnames(scorevalidation) <- paste(lev[1], "/", lev[2], sep = "")
+    } else {
+      scorevalidation <- NULL
+    }
+  }
+
+  else if(modelparameters$modeltype == "naivebayes"){
+    # Naive Bayes
+    cat("Training Naive Bayes model...\n")
+
+    optimal_laplace <- ifelse(is.null(modelparameters$laplace), 0, modelparameters$laplace)
+    model <- naiveBayes(x = learningmodel[,-1], y = learningmodel[,1], laplace = optimal_laplace)
+    model$model_type <- "naivebayes"
+    model$optimal_laplace <- optimal_laplace
+
+    # Probabilities for Naive Bayes
+    pred_probs <- predict(model, learningmodel[,-1], type="raw")
+    scorelearning <- data.frame(pred_probs[, lev["positif"]])
+    colnames(scorelearning) <- paste(lev[1], "/", lev[2], sep = "")
+
+    # Scores for validation
+    if(!is.null(validationmodel)){
+      pred_probs_val <- predict(model, validationmodel[,-1], type="raw")
+      scorevalidation <- data.frame(pred_probs_val[, lev["positif"]])
+      colnames(scorevalidation) <- paste(lev[1], "/", lev[2], sep = "")
+    } else {
+      scorevalidation <- NULL
+    }
+  }
+
+  else if(modelparameters$modeltype == "knn"){
+    # K-Nearest Neighbors
+    cat("Training KNN model...\n")
+
+    if(is.null(modelparameters$autotuneknn) || modelparameters$autotuneknn){
+      # Auto-tuning
+      set.seed(20011203)
+      max_k <- min(floor(sqrt(nrow(learningmodel))), 20)
+      k_values <- seq(3, max_k, by=2)
+
+      best_k <- 3
+      best_acc <- 0
+      for(k_test in k_values){
+        n_folds <- min(5, nrow(learningmodel))
+        fold_size <- floor(nrow(learningmodel) / n_folds)
+        accuracies <- numeric(n_folds)
+        for(fold in 1:n_folds){
+          test_idx <- ((fold-1)*fold_size + 1):min(fold*fold_size, nrow(learningmodel))
+          train_idx <- setdiff(1:nrow(learningmodel), test_idx)
+          pred <- knn(train = learningmodel[train_idx, -1],
+                     test = learningmodel[test_idx, -1],
+                     cl = learningmodel[train_idx, 1],
+                     k = k_test)
+          accuracies[fold] <- mean(pred == learningmodel[test_idx, 1])
+        }
+        avg_acc <- mean(accuracies)
+        if(avg_acc > best_acc){
+          best_acc <- avg_acc
+          best_k <- k_test
+        }
+      }
+      optimal_k <- best_k
+    } else {
+      # Manual k parameter
+      optimal_k <- ifelse(is.null(modelparameters$k_neighbors), 5, modelparameters$k_neighbors)
+    }
+
+    # Store KNN model
+    model <- list(
+      train_data = learningmodel[,-1],
+      train_labels = learningmodel[,1],
+      optimal_k = optimal_k,
+      model_type = "knn"
+    )
+
+    # Calculate probability scores for learning set
+    scorelearning_vec <- numeric(nrow(learningmodel))
+    for(i in 1:nrow(learningmodel)){
+      train_idx <- setdiff(1:nrow(learningmodel), i)
+      distances <- apply(learningmodel[train_idx, -1], 1, function(row) {
+        sqrt(sum((as.numeric(learningmodel[i, -1]) - as.numeric(row))^2))
+      })
+      k_nearest_idx <- order(distances)[1:optimal_k]
+      k_nearest_labels <- learningmodel[train_idx, 1][k_nearest_idx]
+      scorelearning_vec[i] <- sum(k_nearest_labels == lev["positif"]) / optimal_k
+    }
+    scorelearning <- data.frame(scorelearning_vec)
+    colnames(scorelearning) <- paste(lev[1], "/", lev[2], sep = "")
+
+    # Scores for validation
+    if(!is.null(validationmodel)){
+      scorevalidation_vec <- numeric(nrow(validationmodel))
+      for(i in 1:nrow(validationmodel)){
+        distances <- apply(learningmodel[, -1], 1, function(row) {
+          sqrt(sum((as.numeric(validationmodel[i, -1]) - as.numeric(row))^2))
+        })
+        k_nearest_idx <- order(distances)[1:optimal_k]
+        k_nearest_labels <- learningmodel[, 1][k_nearest_idx]
+        scorevalidation_vec[i] <- sum(k_nearest_labels == lev["positif"]) / optimal_k
+      }
+      scorevalidation <- data.frame(scorevalidation_vec)
+      colnames(scorevalidation) <- paste(lev[1], "/", lev[2], sep = "")
+    } else {
+      scorevalidation <- NULL
+    }
+  }
+
   # =========================================================================
   # RETOURNER LES RÉSULTATS (AVEC SCORES, PAS CLASSES)
   # =========================================================================
