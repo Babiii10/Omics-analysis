@@ -3335,3 +3335,302 @@ apply_threshold <- function(model_result, new_threshold, groups = NULL) {
     "modelparameters" = modelparameters
   ))
 }
+
+
+modelfunction_base <- function(learningmodel, validation, modelparameters,
+                               transformdataparameters, datastructuresfeatures,
+                               learningselect) {
+  #' Entraîne le modèle et retourne les SCORES (pas les classes prédites)
+  #' Cette fonction ne dépend PAS du threshold
+  #' Le threshold sera appliqué plus tard dans server.R
+  
+  # Initialisation
+  lev <- levels(learningmodel[,1])
+  names(lev) <- c("positif", "negatif")
+  
+  # Préparer les données de validation si disponibles
+  validationmodel <- NULL
+  if(!is.null(validation)){
+    nameslearning <- colnames(learningmodel)[-1]
+    namesvalidation <- colnames(validation)[-1]
+    
+    # Ajuster les colonnes de validation
+    if(!all(nameslearning %in% namesvalidation)){
+      missingvars <- nameslearning[which(!nameslearning %in% namesvalidation)]
+      dfmissing <- data.frame(matrix(data = 0, nrow = nrow(validation), ncol = length(missingvars)))
+      colnames(dfmissing) <- missingvars
+      validation <- cbind(validation, dfmissing)
+    }
+    
+    validationmodel <- validation[, c("group", nameslearning)]
+    
+    # Transformation des données de validation
+    if(modelparameters$adjustval){
+      validationmodel <- transformdatafunction(
+        learningselect = validationmodel,
+        structuredfeatures = NULL,
+        datastructuresfeatures = NULL,
+        transformdataparameters = transformdataparameters
+      )
+      validationmodel <- validationmodel[, colnames(learningmodel)]
+    }
+    
+    validationmodel[,1] <- factor(validationmodel[,1], levels = lev)
+  }
+  
+  # =========================================================================
+  # ENTRAÎNEMENT DU MODÈLE - POUR CHAQUE TYPE DE MODÈLE
+  # =========================================================================
+  
+  if(modelparameters$modeltype == "randomforest"){
+    # Random Forest
+    cat("Training Random Forest model...\n")
+    
+    if(is.null(modelparameters$autotunerf) || modelparameters$autotunerf){
+      # Tuning automatique
+      set.seed(20011203)
+      ntree_param <- 500
+      
+      # Trouver le mtry optimal
+      p <- ncol(learningmodel) - 1
+      max_mtry <- min(p, 10)
+      mtry_values <- unique(c(floor(sqrt(p)), floor(p/3), floor(p/2)))
+      mtry_values <- mtry_values[mtry_values <= max_mtry & mtry_values > 0]
+      
+      best_auc <- 0
+      best_mtry <- floor(sqrt(p))
+      
+      for(mtry_test in mtry_values){
+        rf_temp <- randomForest(group ~ ., data = learningmodel, 
+                                ntree = ntree_param, mtry = mtry_test)
+        pred_probs <- predict(rf_temp, learningmodel[,-1], type = "prob")[, lev["positif"]]
+        roc_obj <- roc(learningmodel[,1], pred_probs, levels = lev)
+        auc_value <- auc(roc_obj)
+        
+        if(auc_value > best_auc){
+          best_auc <- auc_value
+          best_mtry <- mtry_test
+        }
+      }
+      
+      model <- randomForest(group ~ ., data = learningmodel,
+                            ntree = ntree_param, mtry = best_mtry)
+      model$optimal_mtry <- best_mtry
+      model$ntree_used <- ntree_param
+      
+    } else {
+      # Paramètres manuels
+      ntree_param <- ifelse(is.null(modelparameters$ntree), 500, modelparameters$ntree)
+      mtry_param <- ifelse(is.null(modelparameters$mtry), floor(sqrt(ncol(learningmodel)-1)), 
+                           modelparameters$mtry)
+      
+      model <- randomForest(group ~ ., data = learningmodel,
+                            ntree = ntree_param, mtry = mtry_param)
+      model$optimal_mtry <- mtry_param
+      model$ntree_used <- ntree_param
+    }
+    
+    # Feature selection si demandé
+    if(modelparameters$fs){
+      featureselect <- selectedfeature(model = model, modeltype = "randomforest",
+                                       tab = learningmodel,
+                                       criterionimportance = "fscore",
+                                       criterionmodel = "auc")
+      model <- featureselect$model
+      learningmodel <- featureselect$dataset
+    }
+    
+    # *** MODIFICATION CLÉE : Retourner les PROBABILITÉS, pas les classes ***
+    scorelearning <- predict(model, learningmodel[,-1], type = "prob")[, lev["positif"]]
+    scorelearning <- data.frame(scorelearning)
+    colnames(scorelearning) <- paste(lev[1], "/", lev[2], sep = "")
+    
+    # Scores pour validation
+    if(!is.null(validationmodel)){
+      scorevalidation <- predict(model, validationmodel[,-1], type = "prob")[, lev["positif"]]
+      scorevalidation <- data.frame(scorevalidation)
+      colnames(scorevalidation) <- paste(lev[1], "/", lev[2], sep = "")
+    } else {
+      scorevalidation <- NULL
+    }
+  }
+  
+  else if(modelparameters$modeltype == "svm"){
+    # SVM
+    cat("Training SVM model...\n")
+    
+    if(is.null(modelparameters$autotunesvm) || modelparameters$autotunesvm){
+      # Tuning automatique
+      set.seed(20011203)
+      tuneresult <- tune(svm, group ~ ., data = learningmodel,
+                         kernel = "radial",
+                         ranges = list(
+                           cost = c(0.01, 0.1, 1, 10, 100),
+                           gamma = c(0.001, 0.01, 0.1, 1)
+                         ),
+                         tunecontrol = tune.control(sampling = "cross", cross = 5))
+      
+      cost_param <- tuneresult$best.parameters$cost
+      gamma_param <- tuneresult$best.parameters$gamma
+    } else {
+      cost_param <- ifelse(is.null(modelparameters$cost), 1, modelparameters$cost)
+      gamma_param <- ifelse(is.null(modelparameters$gamma), 0.1, modelparameters$gamma)
+    }
+    
+    model <- svm(group ~ ., data = learningmodel,
+                 kernel = 'radial',
+                 cost = cost_param,
+                 gamma = gamma_param,
+                 type = "C-classification",
+                 probability = TRUE)
+    
+    model$cost <- cost_param
+    model$gamma <- gamma_param
+    
+    if(modelparameters$fs){
+      featureselect <- selectedfeature(model = model, modeltype = "svm",
+                                       tab = learningmodel,
+                                       criterionimportance = "fscore",
+                                       criterionmodel = "auc")
+      model <- featureselect$model
+      learningmodel <- featureselect$dataset
+    }
+    
+    # *** POUR SVM : Utiliser les decision values ***
+    scorelearning <- model$decision.values
+    if(sum(lev == (strsplit(colnames(scorelearning), split = "/")[[1]])) == 0){
+      scorelearning <- scorelearning * (-1)
+      colnames(scorelearning) <- paste(lev[1], "/", lev[2], sep = "")
+    }
+    
+    # Scores pour validation
+    if(!is.null(validationmodel)){
+      pred_val <- predict(model, validationmodel[,-1], decision.values = TRUE)
+      scorevalidation <- attr(pred_val, "decision.values")
+      if(sum(lev == (strsplit(colnames(scorevalidation), split = "/")[[1]])) == 0){
+        scorevalidation <- scorevalidation * (-1)
+        colnames(scorevalidation) <- paste(lev[1], "/", lev[2], sep = "")
+      }
+    } else {
+      scorevalidation <- NULL
+    }
+  }
+  
+  else if(modelparameters$modeltype == "elasticnet"){
+    # ElasticNet (Logistic Regression)
+    cat("Training ElasticNet model...\n")
+    
+    x <- as.matrix(learningmodel[,-1])
+    y <- ifelse(learningmodel[,1] == lev["positif"], 1, 0)
+    
+    alpha_param <- ifelse(is.null(modelparameters$alpha), 0.5, modelparameters$alpha)
+    lambda_param <- modelparameters$lambda
+    
+    if(is.null(lambda_param)){
+      set.seed(20011203)
+      cvfit <- cv.glmnet(x, y, family = "binomial", alpha = alpha_param,
+                         type.measure = "auc", 
+                         nfolds = min(10, nrow(learningmodel) - 1))
+      lambda_param <- cvfit$lambda.min
+      model <- list(glmnet_model = cvfit, lambda = lambda_param,
+                    alpha = alpha_param, cvfit = cvfit,
+                    optimal_lambda = lambda_param,
+                    lambda_1se = cvfit$lambda.1se)
+    } else {
+      fit <- glmnet(x, y, family = "binomial", 
+                    alpha = alpha_param, lambda = lambda_param)
+      model <- list(glmnet_model = fit, lambda = lambda_param,
+                    alpha = alpha_param, cvfit = NULL,
+                    optimal_lambda = lambda_param, lambda_1se = NULL)
+    }
+    
+    if(modelparameters$fs){
+      coef_values <- as.matrix(coef(model$glmnet_model, s = lambda_param))
+      selected_features <- rownames(coef_values)[which(coef_values[-1,1] != 0)]
+      
+      if(length(selected_features) > 0){
+        learningmodel <- learningmodel[, c("group", selected_features)]
+        x <- as.matrix(learningmodel[,-1])
+        
+        if(is.null(modelparameters$lambda)){
+          cvfit <- cv.glmnet(x, y, family = "binomial", alpha = alpha_param,
+                             type.measure = "auc",
+                             nfolds = min(10, nrow(learningmodel) - 1))
+          lambda_param <- cvfit$lambda.min
+          fit <- glmnet(x, y, family = "binomial",
+                        alpha = alpha_param, lambda = lambda_param)
+          model <- list(glmnet_model = fit, lambda = lambda_param,
+                        alpha = alpha_param, cvfit = cvfit,
+                        optimal_lambda = lambda_param,
+                        lambda_1se = cvfit$lambda.1se)
+        } else {
+          fit <- glmnet(x, y, family = "binomial",
+                        alpha = alpha_param, lambda = lambda_param)
+          model <- list(glmnet_model = fit, lambda = lambda_param,
+                        alpha = alpha_param, cvfit = NULL,
+                        optimal_lambda = lambda_param, lambda_1se = NULL)
+        }
+      }
+    }
+    
+    # *** Probabilités pour ElasticNet ***
+    if(inherits(model$glmnet_model, "cv.glmnet")){
+      scorelearning <- as.vector(glmnet:::predict.cv.glmnet(
+        model$glmnet_model, newx = x, s = lambda_param, type = "response"))
+    } else {
+      scorelearning <- as.vector(glmnet::predict.glmnet(
+        model$glmnet_model, newx = x, s = lambda_param, type = "response"))
+    }
+    scorelearning <- data.frame(scorelearning)
+    colnames(scorelearning) <- paste(lev[1], "/", lev[2], sep = "")
+    
+    # Scores pour validation
+    if(!is.null(validationmodel)){
+      x_val <- as.matrix(validationmodel[,-1])
+      if(inherits(model$glmnet_model, "cv.glmnet")){
+        scorevalidation <- as.vector(glmnet:::predict.cv.glmnet(
+          model$glmnet_model, newx = x_val, s = lambda_param, type = "response"))
+      } else {
+        scorevalidation <- as.vector(glmnet::predict.glmnet(
+          model$glmnet_model, newx = x_val, s = lambda_param, type = "response"))
+      }
+      scorevalidation <- data.frame(scorevalidation)
+      colnames(scorevalidation) <- paste(lev[1], "/", lev[2], sep = "")
+    } else {
+      scorevalidation <- NULL
+    }
+  }
+  
+  # =========================================================================
+  # AJOUTER DES BLOCS SIMILAIRES POUR LES AUTRES MODÈLES
+  # =========================================================================
+  # - xgboost
+  # - lightgbm
+  # - naivebayes
+  # - knn
+  # 
+  # Pour chaque modèle, suivre le même pattern :
+  # 1. Entraîner le modèle avec les hyperparamètres
+  # 2. Calculer les scores (probabilités ou decision values)
+  # 3. NE PAS appliquer le threshold
+  # 4. Retourner les scores
+  
+  # =========================================================================
+  # RETOURNER LES RÉSULTATS (AVEC SCORES, PAS CLASSES)
+  # =========================================================================
+  
+  return(list(
+    "model" = model,
+    "scores_learning" = scorelearning,
+    "scores_validation" = scorevalidation,
+    "true_class_learning" = learningmodel[,1],
+    "true_class_validation" = if(!is.null(validationmodel)) validationmodel[,1] else NULL,
+    "levels" = lev,
+    "learningmodel" = learningmodel,
+    "validationmodel" = validationmodel,
+    "modelparameters" = modelparameters
+  ))
+}
+
+
+
