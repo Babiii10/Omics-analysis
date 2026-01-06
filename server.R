@@ -845,7 +845,9 @@ output$donwloadPCAPlot =  downloadHandler(
 
 
 ######
-MODEL<-reactive({
+# MODEL_TRAINED: Trains the model WITHOUT depending on threshold
+# This prevents retraining when only the threshold changes
+MODEL_TRAINED<-reactive({
   if(input$test=="notest"){learningmodel<<-TRANSFORMDATA()$LEARNINGTRANSFORM}
   else{learningmodel<<-TEST()$LEARNINGDIFF}
   validation<<-DATA()$VALIDATION
@@ -950,7 +952,11 @@ MODEL<-reactive({
     use_gridsearch_param <- TRUE
   }
 
-  modelparameters<<-list("modeltype"=input$model,"invers"=F,"thresholdmodel"=input$thresholdmodel,
+  # IMPORTANT: Use a default threshold for training (will be overridden by MODEL())
+  # For SVM, use 0; for probabilistic models, use 0.5
+  default_threshold <- if(input$model == "svm") 0 else 0.5
+
+  modelparameters<<-list("modeltype"=input$model,"invers"=F,"thresholdmodel"=default_threshold,
                          "fs"=input$fs,"adjustval"=input$adjustval,
                          "use_gridsearch"=use_gridsearch_param,
                          "alpha"=alpha_model,"lambda"=lambda_model,
@@ -971,11 +977,36 @@ MODEL<-reactive({
                            transformdataparameters = transformdataparameters,
                            datastructuresfeatures =  datastructuresfeatures,
                            learningselect = learningselect)
-  
+
  list("DATALEARNINGMODEL"=resmodel$datalearningmodel,"MODEL"=resmodel$model,
       "DATAVALIDATIONMODEL"=resmodel$datavalidationmodel,
       "GROUPS"=resmodel$groups,"modelparameters"=resmodel$modelparameters)
-  
+
+  })
+
+# MODEL: Applies threshold to trained model
+# This reactive depends on input$thresholdmodel, but NOT on hyperparameters
+# So changing the threshold is fast (no retraining)
+MODEL<-reactive({
+  # Get the trained model (this won't retrain if threshold changes)
+  trained_model <- MODEL_TRAINED()
+
+  # Apply the current threshold (fast operation)
+  result <- apply_threshold(
+    model_result = list(
+      "datalearningmodel" = trained_model$DATALEARNINGMODEL,
+      "model" = trained_model$MODEL,
+      "datavalidationmodel" = trained_model$DATAVALIDATIONMODEL,
+      "groups" = trained_model$GROUPS,
+      "modelparameters" = trained_model$modelparameters
+    ),
+    new_threshold = input$thresholdmodel
+  )
+
+  # Return in the same format as before
+  list("DATALEARNINGMODEL"=result$datalearningmodel,"MODEL"=result$model,
+       "DATAVALIDATIONMODEL"=result$datavalidationmodel,
+       "GROUPS"=result$groups,"modelparameters"=result$modelparameters)
   })
 
 

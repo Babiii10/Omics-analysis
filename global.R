@@ -1539,6 +1539,77 @@ tune_elasticnet_gridsearch <- function(X, y, param_grid = NULL, n_folds = 5, sco
 # }
 
 ####
+# Function to apply a new threshold without retraining the model
+# This separates threshold adjustment from hyperparameter tuning
+apply_threshold <- function(model_result, new_threshold, groups = NULL) {
+  # Extract necessary data from model_result
+  if (is.null(groups)) {
+    groups <- model_result$groups
+  }
+
+  lev <- groups
+
+  # Apply threshold to learning data
+  scorelearning <- model_result$datalearningmodel$reslearningmodel$scorelearning
+  classlearning <- model_result$datalearningmodel$reslearningmodel$classlearning
+
+  predictclasslearning <- factor(levels = lev)
+  predictclasslearning[which(scorelearning >= new_threshold)] <- lev["positif"]
+  predictclasslearning[which(scorelearning < new_threshold)] <- lev["negatif"]
+  predictclasslearning <- as.factor(predictclasslearning)
+
+  # Update reslearningmodel with new predictions
+  reslearningmodel <- data.frame(
+    classlearning = classlearning,
+    scorelearning = scorelearning,
+    predictclasslearning = predictclasslearning
+  )
+  colnames(reslearningmodel) <- c("classlearning", "scorelearning", "predictclasslearning")
+
+  datalearningmodel <- list(
+    "learningmodel" = model_result$datalearningmodel$learningmodel,
+    "reslearningmodel" = reslearningmodel
+  )
+
+  # Apply threshold to validation data if present
+  datavalidationmodel <- NULL
+  if (!is.null(model_result$datavalidationmodel)) {
+    scoreval <- model_result$datavalidationmodel$resvalidationmodel$scoreval
+    classval <- model_result$datavalidationmodel$resvalidationmodel$classval
+
+    predictclassval <- vector(length = length(scoreval))
+    predictclassval[which(scoreval >= new_threshold)] <- lev["positif"]
+    predictclassval[which(scoreval < new_threshold)] <- lev["negatif"]
+    predictclassval <- as.factor(predictclassval)
+
+    resvalidationmodel <- data.frame(
+      classval = classval,
+      scoreval = scoreval,
+      predictclassval = predictclassval
+    )
+    colnames(resvalidationmodel) <- c("classval", "scoreval", "predictclassval")
+
+    datavalidationmodel <- list(
+      "validationmodel" = model_result$datavalidationmodel$validationmodel,
+      "resvalidationmodel" = resvalidationmodel
+    )
+  }
+
+  # Update model parameters with new threshold
+  modelparameters <- model_result$modelparameters
+  modelparameters$thresholdmodel <- new_threshold
+
+  # Return updated result with new threshold
+  return(list(
+    "datalearningmodel" = datalearningmodel,
+    "model" = model_result$model,
+    "datavalidationmodel" = datavalidationmodel,
+    "groups" = groups,
+    "modelparameters" = modelparameters
+  ))
+}
+
+####
 
 modelfunction <- function(learningmodel,
                           validation=NULL,
