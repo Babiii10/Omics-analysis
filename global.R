@@ -3345,11 +3345,17 @@ modelfunction_base <-  function(learningmodel,
   if(modelparameters$modeltype!="nomodel"){
     #' Entraîne le modèle et retourne les SCORES (pas les classes)
     #' Le threshold sera appliqué plus tard dans server.R
-    
+
     # ========================================================================
     # INITIALISATION (identique à l'original)
     # ========================================================================
-    
+
+    # Rename first column to "group" for consistency
+    colnames(learningmodel)[1] <- "group"
+    if(!is.null(validation)){
+      colnames(validation)[1] <- "group"
+    }
+
     lev <- levels(learningmodel[,1])
     names(lev) <- c("positif", "negatif")
     
