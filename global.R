@@ -3266,6 +3266,9 @@ positive<-function(x){
 # This separates threshold adjustment from hyperparameter tuning
 apply_threshold <- function(model_result, new_threshold, groups = NULL) {
   # Extract necessary data from model_result
+  if(!is.null(model_result)){
+    stop('model is null')
+  }
   if (is.null(groups)) {
     groups <- model_result$groups
   }
@@ -3337,4 +3340,5 @@ apply_threshold <- function(model_result, new_threshold, groups = NULL) {
     "modelparameters" = modelparameters
   ))
 }
+
 
