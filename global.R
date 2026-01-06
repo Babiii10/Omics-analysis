@@ -3458,20 +3458,19 @@ modelfunction_base <-  function(learningmodel,
       }
       
       # *** MODIFICATION CLÉ : Retourner les PROBABILITÉS ***
-      scorelearning <- predict(model, learningmodel[,-1], type = "prob")[, lev["positif"]]
+      scorelearning <- randomForest:::predict.randomForest(model, learningmodel[,-1], type = "prob")[, lev["positif"]]
       scorelearning <- data.frame(scorelearning)
       colnames(scorelearning) <- paste(lev[1], "/", lev[2], sep = "")
       
       # Scores pour validation
       if(!is.null(validationmodel)){
-        scorevalidation <- predict(model, validationmodel[,-1], type = "prob")[, lev["positif"]]
+        scorevalidation <- randomForest:::predict.randomForest(model, validationmodel[,-1], type = "prob")[, lev["positif"]]
         scorevalidation <- data.frame(scorevalidation)
         colnames(scorevalidation) <- paste(lev[1], "/", lev[2], sep = "")
       } else {
         scorevalidation <- NULL
       }
       
-      # *** PAS DE CLASSIFICATION ICI - Ces lignes ont été SUPPRIMÉES ***
       # predictclasslearning <- factor(levels = lev)
       # predictclasslearning[which(scorelearning>=modelparameters$thresholdmodel)] <- lev["positif"]
       # predictclasslearning[which(scorelearning<modelparameters$thresholdmodel)] <- lev["negatif"]
@@ -3819,3 +3818,4 @@ modelfunction_base <-  function(learningmodel,
     
   }
 }
+
