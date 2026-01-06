@@ -853,6 +853,7 @@ output$donwloadPCAPlot =  downloadHandler(
 # ============================================================
 
 BASE_MODEL<-reactive({
+  req(DATA())
   if(input$test=="notest"){learningmodel<<-TRANSFORMDATA()$LEARNINGTRANSFORM}
   else{learningmodel<<-TEST()$LEARNINGDIFF}
   validation<<-DATA()$VALIDATION
@@ -1976,4 +1977,5 @@ output$downloadplottestparametersboth = downloadHandler(
 }) 
 
 # 
+
 
