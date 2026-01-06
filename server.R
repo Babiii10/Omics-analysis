@@ -1004,23 +1004,32 @@ BASE_MODEL <- reactive({
 MODEL_WITH_THRESHOLD <- reactive({
   # Obtenir le modèle de base (avec scores)
   base_model <- BASE_MODEL()
-  
+
   # Obtenir le seuil actuel
   threshold <- input$thresholdmodel
-  
+
   # Appliquer le seuil aux scores
   # Pour learning set
+  # Convert data frame to vector if needed
   scorelearning <- base_model$scores_learning
+  if(is.data.frame(scorelearning)){
+    scorelearning <- scorelearning[,1]
+  }
+
   lev <- base_model$levels
-  
+
   predictclasslearning <- factor(levels = lev)
   predictclasslearning[which(scorelearning >= threshold)] <- lev["positif"]
   predictclasslearning[which(scorelearning < threshold)] <- lev["negatif"]
   predictclasslearning <- as.factor(predictclasslearning)
-  
+
   # Pour validation set (si disponible)
   if(!is.null(base_model$scores_validation)){
     scorevalidation <- base_model$scores_validation
+    # Convert data frame to vector if needed
+    if(is.data.frame(scorevalidation)){
+      scorevalidation <- scorevalidation[,1]
+    }
     predictclassvalidation <- factor(levels = lev)
     predictclassvalidation[which(scorevalidation >= threshold)] <- lev["positif"]
     predictclassvalidation[which(scorevalidation < threshold)] <- lev["negatif"]
